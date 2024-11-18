@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "kmlypy"
+version = "0.1.0"
+description = "python kml file handler."
+authors = ["Filipe Soares <filipe.ns1001@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "yes"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
