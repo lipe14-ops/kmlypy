@@ -10,6 +10,14 @@ class KMLTag(ABC):
         self.attributes = kwargs
         self.children: list[KMLTag] = []
 
+    @property
+    def name(self) -> str | None:
+        return self.attributes.get('name')
+
+    @property
+    def description(self) -> str | None:
+        return self.attributes.get('description')
+
     def __repr__(self) -> str:
         return type(self).__name__.replace("KML", '')
 
@@ -31,11 +39,29 @@ class KMLTag(ABC):
 
 
 class KMLFolder(KMLTag):
-    pass
 
-class KMLDocument(KMLTag):
-    pass
+    def path(self, path: str) -> KMLFolder | KMLPlacemark:
+        dirs = list(filter(lambda x: x, path.split('/')))
 
+        if not dirs:
+            return self
+
+        dir = dirs.pop(0)
+            
+        for child in self.children:
+            if child.name == dir:
+                if isinstance(child, KMLFolder):
+                    child_path = '/'.join(dirs)
+                    return child.path(child_path)
+
+                elif isinstance(child, KMLPlacemark):
+                    return child
+            
+        raise ValueError("FOLDER NOT FOUND")
+
+
+class KMLDocument(KMLFolder):
+    pass
 
 class KMLPlacemark(KMLTag):
     def __init__(self, geometry: Point | Polygon | LineString | LinearRing,  *args, **kwargs):
@@ -134,8 +160,6 @@ def kml_parse_placemark(tree_node, namespace: str | None = '') -> KMLPlacemark:
         outer_points_tag = geometry_tag.find(f'{namespace}outerBoundaryIs')
         inner_points_tag = geometry_tag.findall(f'{namespace}innerBoundaryIs')
     
-        geometry = Polygon()
-
         outer_points = []
         outer_points_string = outer_points_tag.find(f"{namespace}LinearRing").find(f'{namespace}coordinates').text
 
@@ -231,22 +255,32 @@ class KMLFile(object):
     def __init__(self, filepath: Path | str) -> None:
         self.filepath = filepath
 
-    def __enter__(self):
+    def __enter__(self) -> KMLDocument:
         kml_tree = ET.parse(self.filepath)
         kml_root = kml_tree.getroot()
 
         namespace = kml_root.tag[: kml_root.tag.index('}') + 1]
 
         document = KMLTag(namespace=namespace)
-        return kml_parse_file(kml_root, document).children.pop()
+        file = kml_parse_file(kml_root, document).children.pop()
+
+        if not isinstance(file, KMLDocument):
+            raise ValueError("INVALID FILE FORMAT")
+
+        return file
 
     def __exit__(self, exec_type, exec_val, exec_tb) -> None:
         return 
         
 def main():
 
-    with KMLFile('./res/file-5.kml') as kml_file:
-        print(kml_file)
+    with KMLFile('./res/file-2.kml') as kml_file:
+        polygon = kml_file.path('/Área B/Polígono B1')
+
+        if not isinstance(polygon, KMLPlacemark):
+            raise ValueError("NAO E POLIGONO")
+        
+        print(polygon.geometry.area)
 
     return
 
