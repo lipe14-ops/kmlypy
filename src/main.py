@@ -18,11 +18,22 @@ class KMLTag(ABC):
     def description(self) -> str | None:
         return self.attributes.get('description')
 
-    def __repr__(self) -> str:
-        return type(self).__name__.replace("KML", '')
+    @name.setter
+    def name(self, value: str) -> str:
+        self.attributes['name'] = value
+        return value
 
-    def __str__(self) -> str:
-        tag_name = self.__repr__()
+    @description.setter
+    def description(self, value: str) -> str:
+        self.attributes['description'] = value
+        return value
+
+    def __repr__(self) -> str:
+        tag_name = type(self).__name__.replace("KML", '')
+        return f'<KMLTag {hex(id(self))} {self.namespace}{tag_name}>'
+
+    def as_kml(self) -> str:
+        tag_name = type(self).__name__.replace("KML", '')
         tag_body = '\n'
 
         for att_name, att_body in self.attributes.items():
@@ -30,12 +41,13 @@ class KMLTag(ABC):
                 tag_body += f'<{att_name}>{att_body}</{att_name}>\n'
 
         for child in self.children:
-            tag_body += child.__str__() + '\n'
+            tag_body += child.as_kml() + '\n'
 
         return f"<{tag_name}>{tag_body}</{tag_name}>"
 
-    def _add_tag(self, tag: KMLTag) -> None:
+    def add_tag(self, tag: KMLTag) -> KMLTag:
         self.children.append(tag)
+        return tag
 
 
 class KMLFolder(KMLTag):
@@ -68,8 +80,8 @@ class KMLPlacemark(KMLTag):
         super().__init__(*args, **kwargs);
         self.geometry = geometry
 
-    def __str__(self) -> str:
-        tag_name = self.__repr__()
+    def as_kml(self) -> str:
+        tag_name = type(self).__name__.replace("KML", '')
         tag_body = '\n'
 
         for att_name, att_body in self.attributes.items():
@@ -79,18 +91,23 @@ class KMLPlacemark(KMLTag):
         string = f"<{tag_name}>{tag_body}"
 
         if isinstance(self.geometry, Point):
-            string += f"<Point>{self.geometry.x},{self.geometry.y}"
+            string += f"<Point>\n"
+            string += "<coordinates>"
+            
+            string += f"{self.geometry.x},{self.geometry.y}"
             
             if self.geometry.length == 3:
                 string += f",{self.geometry.z}"
 
+            string += "</coordinates>\n"
             string += "</Point>\n"
 
         elif isinstance(self.geometry, Polygon):
             string += f"<Polygon>\n" 
 
             string += "<outerBoundaryIs>\n"
-            string += "<LinearRing>"
+            string += "<LinearRing>\n"
+            string += "<coordinates>"
             
             for point in self.geometry.exterior.coords:
                 string += f'{point[0]},{point[1]}'
@@ -100,12 +117,14 @@ class KMLPlacemark(KMLTag):
 
                 string += ' '
 
+            string += "</coordinates>\n"
             string += "</LinearRing>\n"
             string += "</outerBoundaryIs>\n"
 
             for hole in self.geometry.interiors:
                 string += "<innerBoundaryIs>\n"
-                string += "<LinearRing>"
+                string += "<LinearRing>\n"
+                string += "<coordinates>"
                 
                 for point in hole.coords:
                     string += f'{point[0]},{point[1]}'
@@ -115,13 +134,15 @@ class KMLPlacemark(KMLTag):
 
                     string += ' '
 
+                string += "</coordinates>"
                 string += "</LinearRing>\n"
                 string += "</innerBoundaryIs>\n"
 
             string += "</Polygon>\n"
 
         elif isinstance(self.geometry, LinearRing):
-            string += f"<LinearRing>"
+            string += f"<LinearRing>\n"
+            string += "<coordinates>"
 
             for point in self.geometry.coords:
                 string += f'{point[0]},{point[1]}'
@@ -131,14 +152,17 @@ class KMLPlacemark(KMLTag):
 
                 string += ' '
 
+            string += "</coordinates>\n"
             string += "</LinearRing>\n"
 
         elif isinstance(self.geometry, LineString):
-            string += f"<LineString>"
+            string += f"<LineString>\n"
+            string += "<coordinates>"
 
             for point in self.geometry.coords:
                 string += f'{point[0]},{point[1]},{point[2]} '
 
+            string += "</coordinates>\n"
             string += "</LineString>\n"
         
         return string + f"</{tag_name}>"
@@ -236,8 +260,7 @@ def kml_parse_file(tree_node, tag: KMLTag) -> KMLTag:
                 )
 
             case x if x.endswith('Placemark'):
-                placemark = kml_parse_placemark(child, tag.namespace)
-                tag._add_tag(placemark)
+               element = kml_parse_placemark(child, tag.namespace)
 
             case _:
                 kml_parse_file(child, tag)
@@ -245,41 +268,93 @@ def kml_parse_file(tree_node, tag: KMLTag) -> KMLTag:
         if not element:
             continue
 
-        tag._add_tag(element)
+        tag.add_tag(element)
         kml_parse_file(child, element)
 
     return tag
 
 
 class KMLFile(object):
-    def __init__(self, filepath: Path | str) -> None:
+    def __init__(self, filepath: Path | str, autosave: bool = True, mode: str = 'r', namespace: str = '') -> None:
         self.filepath = filepath
+        self.autosave = autosave
+        self.mode = mode
+        self.document: KMLDocument = KMLDocument()
+        self.namespace = namespace
 
-    def __enter__(self) -> KMLDocument:
-        kml_tree = ET.parse(self.filepath)
-        kml_root = kml_tree.getroot()
+    def __enter__(self) -> KMLFile:
+        try:
+            kml_tree = ET.parse(self.filepath)
+            kml_root = kml_tree.getroot()
 
-        namespace = kml_root.tag[: kml_root.tag.index('}') + 1]
+            try:
+                self.namespace = kml_root.tag[: kml_root.tag.index('}') + 1]
+            except ValueError: 
+                self.namespace = ''
 
-        document = KMLTag(namespace=namespace)
-        file = kml_parse_file(kml_root, document).children.pop()
+            document = KMLTag(namespace=self.namespace)
+            file_content = kml_parse_file(kml_root, document).children.pop()
 
-        if not isinstance(file, KMLDocument):
-            raise ValueError("INVALID FILE FORMAT")
+            if not isinstance(file_content, KMLDocument):
+                raise ValueError("INVALID FILE FORMAT")
 
-        return file
+            self.document = file_content
+
+        except FileNotFoundError as error:
+            if self.mode in ('r', 'rb'):
+                raise error
+
+        return self
 
     def __exit__(self, exec_type, exec_val, exec_tb) -> None:
-        return 
+        if self.autosave and self.mode in ('w', 'wb'):
+            self.save()
+
+    def save(self, filepath: str | Path | None = None) -> None:
+        filepath = filepath if filepath else self.filepath
+
+        header = f'<?xml version="1.0" encoding="UTF-8"?>\n'
+        data = header
+        data += "<kml"
+        data += '' if not self.namespace else f' xmlns="{self.namespace}"'
+        data += '>\n'
+
+        data += self.document.as_kml()
         
+        data += '\n</kml>'
+
+        kml_tree = ET.fromstring(data)
+        ET.indent(kml_tree)
+
+        with open(filepath, 'w') as kml_file:
+            kml_file.write(
+                    header + ET.tostring(kml_tree, encoding='unicode')
+                    )
+
 def main():
 
-    with KMLFile('./res/file-2.kml') as kml_file:
-        polygon = kml_file.path('/Área B/Polígono B1')
+    with KMLFile('./res/file-7.kml', mode='w') as kml_file:
+        kml_file.document.name = "CAVALO"
+
+        pasta = kml_file.document.add_tag(
+                KMLFolder(name="PASTA", description="PASTA TOP DEMAIS")
+                )
+
+        pasta.add_tag(
+                KMLPlacemark(
+                    name="PONTO",
+                    geometry=Point(10, 10)
+                    )
+                )
+
+        # kml_file.save()
+
+    with KMLFile('./res/file-7.kml') as kml_file:
+        polygon = kml_file.document.path('/PASTA/PONTO')
 
         if not isinstance(polygon, KMLPlacemark):
             raise ValueError("NAO E POLIGONO")
-        
+
         print(polygon.geometry.area)
 
     return
